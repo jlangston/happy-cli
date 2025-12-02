@@ -32,6 +32,19 @@ function resolvePathSafe(filePath) {
 }
 
 /**
+ * Check if bunx is available for running Claude Code
+ * @returns {boolean} True if bunx command is available
+ */
+function isBunxAvailable() {
+    try {
+        execSync('bunx --version', { encoding: 'utf8', stdio: 'pipe' });
+        return true;
+    } catch (e) {
+        return false;
+    }
+}
+
+/**
  * Find path to npm globally installed Claude Code CLI
  * @returns {string|null} Path to cli.js or null if not found
  */
@@ -252,13 +265,19 @@ function findLatestVersionBinary(versionsDir, binaryName = null) {
 /**
  * Find path to globally installed Claude Code CLI
  * Checks multiple installation methods in order of preference:
- * 1. npm global (highest priority)
- * 2. Homebrew
- * 3. Native installer
+ * 1. bunx (highest priority - always latest)
+ * 2. npm global
+ * 3. Homebrew
+ * 4. Native installer
  * @returns {{path: string, source: string}|null} Path and source, or null if not found
  */
 function findGlobalClaudeCliPath() {
-    // Check npm global first (highest priority)
+    // Check bunx first (highest priority - always gets latest version)
+    if (isBunxAvailable()) {
+        return { path: 'bunx', source: 'bunx' };
+    }
+
+    // Check npm global
     const npmPath = findNpmGlobalCliPath();
     if (npmPath) return { path: npmPath, source: 'npm' };
 
@@ -328,21 +347,35 @@ function getClaudeCliPath() {
         process.exit(1);
     }
 
-    const version = getVersion(result.path);
-    const versionStr = version ? ` v${version}` : '';
+    // For bunx, we don't have a static version - it fetches latest
+    const version = result.source === 'bunx' ? null : getVersion(result.path);
+    const versionStr = version ? ` v${version}` : (result.source === 'bunx' ? ' (latest)' : '');
     console.error(`\x1b[90mUsing Claude Code${versionStr} from ${result.source}\x1b[0m`);
 
     return result.path;
 }
 
 /**
- * Run Claude CLI, handling both JavaScript and binary files
- * @param {string} cliPath - Path to CLI (from getClaudeCliPath)
+ * Run Claude CLI, handling JavaScript files, binaries, and bunx
+ * @param {string} cliPath - Path to CLI or 'bunx' (from getClaudeCliPath)
  */
 function runClaudeCli(cliPath) {
     const { pathToFileURL } = require('url');
     const { spawn } = require('child_process');
-    
+
+    // Handle bunx - run dynamically
+    if (cliPath === 'bunx') {
+        const args = ['@anthropic-ai/claude-code', ...process.argv.slice(2)];
+        const child = spawn('bunx', args, {
+            stdio: 'inherit',
+            env: process.env
+        });
+        child.on('exit', (code) => {
+            process.exit(code || 0);
+        });
+        return;
+    }
+
     // Check if it's a JavaScript file (.js or .cjs) or a binary file
     const isJsFile = cliPath.endsWith('.js') || cliPath.endsWith('.cjs');
 
@@ -370,6 +403,7 @@ module.exports = {
     findNpmGlobalCliPath,
     findHomebrewCliPath,
     findNativeInstallerCliPath,
+    isBunxAvailable,
     getVersion,
     compareVersions,
     getClaudeCliPath,
